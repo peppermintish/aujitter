@@ -1,4 +1,6 @@
-AuJitter 0.1.0 provides a shared background monitor with CLI, local web dashboard and native GPUI Kit interface. It records observed interruptions, latency/jitter, DNS and TCP evidence, confidence-qualified diagnoses, and local history with manual export. Gaming mode reduces probe frequency; sign-in startup is optional.
+AuJitter 0.1.1 adds a native system tray icon (macOS menu bar) to the desktop application. Closing the window keeps the tray and monitoring running. Its menu shows current status and provides Open AuJitter, the web dashboard, pause/resume, Gaming mode, Start monitor when unavailable, and Stop monitoring and quit. Ctrl/Cmd+Q also stops monitoring and quits. Launching the desktop twice reopens the existing window without duplicating the tray; optional sign-in startup and `aujitter-gui --background` start quietly in the tray. Linux requires a StatusNotifierItem host, with a visible fallback window if tray creation fails.
+
+The shared background monitor retains CLI, local web dashboard and native GPUI Kit interfaces. It records observed interruptions, latency/jitter, DNS and TCP evidence, confidence-qualified diagnoses, and local history with manual export. Gaming mode reduces probe frequency; sign-in startup is optional.
 
 Includes Automatic connection-based preset selection, plus 11 manual situation presets and Custom preferences. Automatic uses connection information only and keeps the manual Gaming switch. Preset choices and warning thresholds are retained with each new sample.
 

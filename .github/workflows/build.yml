@@ -46,11 +46,16 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: ${{ matrix.target }}
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           key: native-${{ matrix.target }}
       - name: Test on the native architecture
         run: cargo test --locked --no-default-features --target ${{ matrix.target }}
+      - name: Check desktop code and tray state on the native architecture
+        run: |
+          cargo clippy --locked --features desktop --all-targets --target ${{ matrix.target }} -- -D warnings
+          cargo test --locked --features desktop --lib desktop:: --target ${{ matrix.target }}
       - name: Build CLI and GPUI desktop
         run: cargo build --locked --release --features desktop --bins --target ${{ matrix.target }}
       - name: Exercise the packaged service

@@ -12,7 +12,11 @@ Download a package for your OS and architecture from [GitHub Actions](https://gi
 - **macOS:** open the DMG and copy AuJitter into Applications. Initial builds are ad-hoc signed and are not yet Developer ID signed or notarized. The CLI is inside `AuJitter.app/Contents/MacOS/aujitter`.
 - **Linux:** install the `.deb` on Ubuntu 24.04 or newer, or unpack the portable archive with the required native libraries installed. The GUI needs a working Vulkan graphics driver and an X11 or Wayland desktop.
 
-Opening the desktop starts the monitor. Closing the desktop or browser leaves it running. Enable **Start at sign-in** in desktop Settings to opt in. The CLI offers the same preference for installations that include both binaries.
+Opening the desktop starts the monitor and adds an **AuJitter system tray icon** (menu bar on macOS). Closing the window leaves the icon and monitoring running. On Windows, the icon may initially appear in the **^ hidden icons** panel beside the clock. Left-click it to reopen AuJitter; right-click for status, the web dashboard, pause/resume, Gaming mode, and **Start monitor** if the monitor has stopped. **Stop monitoring and quit**, or Ctrl/Cmd+Q, stops both the monitor and desktop. Closing a browser does not stop monitoring.
+
+Enable **Start at sign-in** in desktop Settings to opt in; this starts in the tray without opening a window. `aujitter-gui --background` does the same immediately. Launching the desktop again reopens its existing window instead of creating another tray icon. The CLI offers the same sign-in preference for installations that include both binaries. CLI-only and Docker installations continue to run without a tray.
+
+Linux tray support requires the desktop's StatusNotifierItem service. If the tray cannot be created, AuJitter opens its window and explains the limitation instead of starting an invisible desktop session.
 
 ```sh
 aujitter start

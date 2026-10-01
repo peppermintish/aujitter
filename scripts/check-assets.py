@@ -12,4 +12,5 @@ identity = json.loads((root / "packaging/windows/identity.json").read_text())
 assert identity["name"] == "Gofor.auJitter"
 assert identity["store_id"] == "9NDKBXRLSXDT"
 ET.parse(root / "packaging/windows/AppxManifest.xml.in")
+assert len((root / "packaging/assets/tray32.rgba").read_bytes()) == 32 * 32 * 4
 print("Installer assets and identity verified")

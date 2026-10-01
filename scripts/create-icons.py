@@ -11,3 +11,5 @@ draw.line([(144, 536), (336, 536), (424, 328), (544, 736), (648, 448), (720, 536
 for filename, size in [("icon1024.png", 1024), ("Square150x150Logo.png", 150), ("Square44x44Logo.png", 44), ("StoreLogo.png", 50)]:
     image.resize((size, size), Image.Resampling.LANCZOS).save(out / filename)
 image.save(out / "aujitter.ico", sizes=[(16,16), (32,32), (48,48), (256,256)])
+# Native tray libraries accept RGBA pixels; embed this small mark without an image decoder.
+(out / "tray32.rgba").write_bytes(image.resize((32, 32), Image.Resampling.LANCZOS).tobytes())

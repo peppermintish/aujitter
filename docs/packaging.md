@@ -21,7 +21,7 @@ The product was reserved in the existing Partner Center account on 1 October 202
 - Store ID: `9NDKBXRLSXDT`
 - [Partner Center product](https://partner.microsoft.com/en-us/dashboard/products/9NDKBXRLSXDT/overview)
 
-These public package identity values live in `packaging/windows/identity.json`. The manifest uses them exactly, plus the actual architecture and a four-part package version (`0.1.0.0`). The fourth version part stays zero for Store submissions. It provides the desktop full-trust application, icons, and the `aujitter.exe` execution alias. Windows targets use a static C runtime. Monitor traffic is the app's own connectivity checks, without packet interception.
+These public package identity values live in `packaging/windows/identity.json`. The manifest uses them exactly, plus the actual architecture and a four-part package version (`0.1.1.0`). The fourth version part stays zero for Store submissions. It provides the desktop full-trust application, icons, and the `aujitter.exe` execution alias. Windows targets use a static C runtime. Monitor traffic is the app's own connectivity checks, without packet interception.
 
 `MakeAppx pack` validates the manifest and creates an **unsigned** package. Microsoft Store ingestion can accept an unsigned MSIX and applies Store signing. Direct sideloading needs a valid signature trusted by that machine. The portable ZIP is immediately usable without installing a signing certificate. No self-signed trust root, certificate, or private signing key is installed automatically.
 

@@ -1,4 +1,7 @@
 //! Native presentation of the same local monitoring service used by the CLI and web UI.
+mod instance;
+mod tray;
+
 use crate::{
     config::{self, Settings},
     model::{Dashboard, ProbeKind, Severity},
@@ -18,6 +21,7 @@ use gpui_kit::component::{
     switch::Switch,
 };
 use gpui_kit::*;
+use instance::DesktopInstance;
 use std::{
     path::PathBuf,
     process::{Command, Stdio},
@@ -25,8 +29,9 @@ use std::{
         Arc, Mutex,
         mpsc::{self, SyncSender},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
+use tray::{Tray, TrayAction};
 
 actions!(
     aujitter,
@@ -41,6 +46,8 @@ struct Live {
     notice: String,
     error: Option<String>,
     startup: bool,
+    connected: bool,
+    should_quit: bool,
 }
 enum Operation {
     Control(serde_json::Value),
@@ -48,6 +55,157 @@ enum Operation {
     Preset(Preset),
     Export,
     Startup(bool),
+    Restart,
+    Shutdown,
+}
+
+#[derive(Clone, Copy)]
+enum DesktopEvent {
+    LiveChanged,
+    OperationFinished,
+    Tray(TrayAction),
+}
+
+struct DesktopSession(Entity<DesktopState>);
+impl Global for DesktopSession {}
+
+/// The session owns the worker and tray; closing a presentation window drops neither.
+struct DesktopState {
+    live: Live,
+    commands: SyncSender<Operation>,
+    tray: Option<Tray>,
+    tray_error: Option<String>,
+    quitting: bool,
+    _events: Task<()>,
+}
+
+impl DesktopState {
+    fn new(request_path: PathBuf, support: Result<()>, cx: &mut Context<Self>) -> Self {
+        let (events, incoming) = async_channel::bounded(16);
+        let (tray, tray_error) = match support.and_then(|_| Tray::new(events.clone())) {
+            Ok(tray) => (Some(tray), None),
+            Err(error) => (
+                None,
+                Some(format!(
+                    "System tray unavailable: {error}. The monitor can still run in the background."
+                )),
+            ),
+        };
+        tracing::info!(
+            tray_available = tray.is_some(),
+            "AuJitter desktop session started"
+        );
+        let live = Live {
+            notice: if tray.is_some() {
+                "Closing the window keeps monitoring in the system tray.".into()
+            } else {
+                String::new()
+            },
+            ..Default::default()
+        };
+        let shared = Arc::new(Mutex::new(live.clone()));
+        let (commands, receiver) = mpsc::sync_channel(8);
+        let observed = shared.clone();
+        std::thread::spawn(move || worker(shared, receiver, events, request_path));
+        let task = cx.spawn(async move |this, cx| {
+            while let Ok(event) = incoming.recv().await {
+                // Window creation reads this session from the new view. Perform it outside
+                // the session's entity update, so neither state nor deferred effects are leased.
+                if matches!(event, DesktopEvent::Tray(TrayAction::Open)) {
+                    cx.update(|cx| {
+                        if let Some(session) = this.upgrade() {
+                            show_window(session, cx);
+                        }
+                    });
+                    continue;
+                }
+                let snapshot = observed.lock().unwrap().clone();
+                if let Err(error) = this.update(cx, |session, cx| match event {
+                    DesktopEvent::Tray(action) => session.handle_action(action, cx),
+                    DesktopEvent::LiveChanged | DesktopEvent::OperationFinished => {
+                        let changed = session.live.revision != snapshot.revision;
+                        if matches!(event, DesktopEvent::OperationFinished) {
+                            session.quitting = false;
+                        }
+                        session.live = snapshot;
+                        if session.live.should_quit {
+                            cx.quit();
+                            return;
+                        }
+                        session.refresh_tray();
+                        if changed || matches!(event, DesktopEvent::OperationFinished) {
+                            cx.notify();
+                        }
+                    }
+                }) {
+                    tracing::error!(%error, "Desktop event session ended");
+                    break;
+                }
+            }
+        });
+        Self {
+            live,
+            commands,
+            tray,
+            tray_error,
+            quitting: false,
+            _events: task,
+        }
+    }
+
+    fn snapshot(&self) -> Live {
+        let mut live = self.live.clone();
+        if let Some(error) = &self.tray_error {
+            live.error = Some(match live.error {
+                Some(other) => format!("{other} {error}"),
+                None => error.clone(),
+            });
+        }
+        live
+    }
+
+    fn refresh_tray(&mut self) {
+        if let Some(tray) = &mut self.tray {
+            tray.update(&self.live, self.quitting);
+        }
+    }
+
+    fn handle_action(&mut self, action: TrayAction, cx: &mut Context<Self>) {
+        tracing::debug!(?action, "Desktop command received");
+        let operation = match action {
+            TrayAction::Open => {
+                let session = cx.entity();
+                cx.defer(move |cx| show_window(session, cx));
+                return;
+            }
+            TrayAction::Web => {
+                cx.open_url("http://127.0.0.1:9876");
+                return;
+            }
+            _ if self.quitting => return,
+            TrayAction::Pause => {
+                let Some(view) = self.live.view.as_ref().filter(|_| self.live.connected) else {
+                    return;
+                };
+                Operation::Control(serde_json::json!({"paused": !view.paused}))
+            }
+            TrayAction::Gaming => {
+                let Some(view) = self.live.view.as_ref().filter(|_| self.live.connected) else {
+                    return;
+                };
+                Operation::Control(serde_json::json!({"gaming": !view.gaming}))
+            }
+            TrayAction::Restart => Operation::Restart,
+            TrayAction::Quit => Operation::Shutdown,
+        };
+        let quitting = matches!(&operation, Operation::Shutdown);
+        match self.commands.try_send(operation) {
+            Ok(()) => self.quitting = quitting,
+            Err(error) => self.live.error = Some(format!("Command not sent: {error}")),
+        }
+        self.refresh_tray();
+        cx.notify();
+    }
 }
 
 fn monitor_executable() -> Result<PathBuf> {
@@ -77,7 +235,15 @@ fn start_monitor() -> Result<()> {
     Ok(())
 }
 
-fn worker(shared: Arc<Mutex<Live>>, commands: mpsc::Receiver<Operation>) {
+fn worker(
+    shared: Arc<Mutex<Live>>,
+    commands: mpsc::Receiver<Operation>,
+    events: async_channel::Sender<DesktopEvent>,
+    request_path: PathBuf,
+) {
+    let publish = |event| {
+        let _ = events.send_blocking(event);
+    };
     let token = std::env::var("AUJITTER_TOKEN").ok();
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(4))
@@ -86,7 +252,11 @@ fn worker(shared: Arc<Mutex<Live>>, commands: mpsc::Receiver<Operation>) {
     {
         Ok(client) => client,
         Err(error) => {
-            shared.lock().unwrap().error = Some(error.to_string());
+            let mut live = shared.lock().unwrap();
+            live.error = Some(error.to_string());
+            live.revision += 1;
+            drop(live);
+            publish(DesktopEvent::LiveChanged);
             return;
         }
     };
@@ -94,6 +264,8 @@ fn worker(shared: Arc<Mutex<Live>>, commands: mpsc::Receiver<Operation>) {
         let mut live = shared.lock().unwrap();
         live.error = Some(error.to_string());
         live.revision += 1;
+        drop(live);
+        publish(DesktopEvent::LiveChanged);
     }
     let request = |route: &str| {
         let request = client.get(format!("http://127.0.0.1:9876/api/{route}"));
@@ -109,29 +281,46 @@ fn worker(shared: Arc<Mutex<Live>>, commands: mpsc::Receiver<Operation>) {
             request("settings").send()?.error_for_status()?.json()?,
         ))
     };
+    let mut next_refresh = Instant::now();
     loop {
-        match refresh() {
-            Ok((view, preferences)) => {
-                let mut live = shared.lock().unwrap();
-                live.view = Some(view);
-                live.preferences = Some(preferences);
-                live.error = None;
-                live.revision += 1;
-                live.startup = startup::is_enabled();
-            }
-            Err(error) => {
-                let mut live = shared.lock().unwrap();
-                live.error = Some(format!(
-                    "Monitor unavailable: {error}. Last observations may be stale."
-                ));
-                live.revision += 1;
-            }
+        // Local IPC is only a request to show the existing window. All disk/network I/O stays here.
+        if std::fs::remove_file(&request_path).is_ok() {
+            tracing::debug!("Existing desktop requested to open its window");
+            publish(DesktopEvent::Tray(TrayAction::Open));
         }
-        let operation = match commands.recv_timeout(Duration::from_secs(5)) {
+        if Instant::now() >= next_refresh {
+            match refresh() {
+                Ok((view, preferences)) => {
+                    let start_at_sign_in = startup::is_enabled();
+                    let mut live = shared.lock().unwrap();
+                    live.view = Some(view);
+                    live.preferences = Some(preferences);
+                    live.error = None;
+                    live.connected = true;
+                    live.revision += 1;
+                    live.startup = start_at_sign_in;
+                }
+                Err(error) => {
+                    let mut live = shared.lock().unwrap();
+                    live.error = Some(format!(
+                        "Monitor unavailable: {error}. Last observations may be stale."
+                    ));
+                    live.revision += 1;
+                    live.connected = false;
+                }
+            }
+            publish(DesktopEvent::LiveChanged);
+            next_refresh = Instant::now() + Duration::from_secs(5);
+        }
+        let wait = next_refresh
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_secs(1));
+        let operation = match commands.recv_timeout(wait) {
             Ok(operation) => operation,
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
+        let shutting_down = matches!(&operation, Operation::Shutdown);
         let result: Result<String> = (|| match operation {
             Operation::Control(payload) => {
                 let mut request = client
@@ -197,16 +386,42 @@ fn worker(shared: Arc<Mutex<Live>>, commands: mpsc::Receiver<Operation>) {
                 }
                 .into())
             }
+            Operation::Restart => {
+                start_monitor()?;
+                Ok("Monitor started".into())
+            }
+            Operation::Shutdown => {
+                let mut call = client.post("http://127.0.0.1:9876/api/shutdown");
+                if let Some(token) = &token {
+                    call = call.bearer_auth(token);
+                }
+                match call.send() {
+                    Ok(response) => {
+                        response.error_for_status()?;
+                    }
+                    Err(error) if error.is_connect() => {} // An already stopped monitor needs no shutdown.
+                    Err(error) => return Err(error.into()),
+                }
+                Ok("Monitoring stopped".into())
+            }
         })();
         let mut live = shared.lock().unwrap();
         match result {
             Ok(notice) => {
                 live.notice = notice;
                 live.error = None;
+                live.should_quit = shutting_down;
             }
             Err(error) => live.error = Some(error.to_string()),
         };
         live.revision += 1;
+        let should_quit = live.should_quit;
+        drop(live);
+        publish(DesktopEvent::OperationFinished);
+        if should_quit {
+            break;
+        }
+        next_refresh = Instant::now();
     }
 }
 
@@ -217,6 +432,7 @@ enum Page {
     Preferences,
 }
 struct NetworkWindow {
+    session: Entity<DesktopState>,
     commands: SyncSender<Operation>,
     live: Live,
     page: Page,
@@ -231,7 +447,7 @@ struct NetworkWindow {
     preset: Entity<SelectState<Vec<SharedString>>>,
     _preset_subscription: Subscription,
     discover_router: bool,
-    _poll: Task<()>,
+    _live_subscription: Subscription,
 }
 
 fn metric(title: &str, value: String, caption: &str, cx: &App) -> Div {
@@ -271,28 +487,12 @@ fn time(value: chrono::DateTime<chrono::Utc>) -> String {
 }
 
 impl NetworkWindow {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let shared = Arc::new(Mutex::new(Live::default()));
-        let (commands, receiver) = mpsc::sync_channel(8);
-        let background = shared.clone();
-        std::thread::spawn(move || worker(background, receiver));
-        let observed = shared.clone();
-        let poll = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                let snapshot = observed.lock().unwrap().clone();
-                if this
-                    .update(cx, |view, cx| {
-                        if view.live.revision != snapshot.revision {
-                            view.live = snapshot;
-                            cx.notify();
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
+    fn new(session: Entity<DesktopState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let commands = session.read(cx).commands.clone();
+        let live = session.read(cx).snapshot();
+        let subscription = cx.observe(&session, |view, session, cx| {
+            view.live = session.read(cx).snapshot();
+            cx.notify();
         });
         let mut input =
             |placeholder: &str| cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
@@ -321,8 +521,9 @@ impl NetworkWindow {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         Self {
+            session,
             commands,
-            live: Live::default(),
+            live,
             page: Page::Monitor,
             focus,
             isp,
@@ -335,7 +536,7 @@ impl NetworkWindow {
             preset,
             _preset_subscription: preset_subscription,
             discover_router: false,
-            _poll: poll,
+            _live_subscription: subscription,
         }
     }
     fn send(&mut self, operation: Operation, cx: &mut Context<Self>) {
@@ -347,20 +548,14 @@ impl NetworkWindow {
         cx.notify();
     }
     fn toggle_pause(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = &self.live.view {
-            self.send(
-                Operation::Control(serde_json::json!({"paused":!view.paused})),
-                cx,
-            );
-        }
+        self.session.update(cx, |session, cx| {
+            session.handle_action(TrayAction::Pause, cx)
+        });
     }
     fn toggle_gaming(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = &self.live.view {
-            self.send(
-                Operation::Control(serde_json::json!({"gaming":!view.gaming})),
-                cx,
-            );
-        }
+        self.session.update(cx, |session, cx| {
+            session.handle_action(TrayAction::Gaming, cx)
+        });
     }
     fn open_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(settings) = &self.live.preferences {
@@ -1006,51 +1201,134 @@ impl Render for NetworkWindow {
     }
 }
 
-pub fn run() {
-    if std::env::args().any(|arg| arg == "--background") {
-        let _ = start_monitor();
-        return;
-    }
-    gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
-        .run(|cx| {
-            gpui_kit::init(cx);
-            let modifier = if cfg!(target_os = "macos") {
-                "cmd"
-            } else {
-                "ctrl"
-            };
-            cx.bind_keys([
-                KeyBinding::new(&format!("{modifier}-g"), ToggleGaming, Some("AuJitter")),
-                KeyBinding::new(&format!("{modifier}-p"), TogglePause, Some("AuJitter")),
-                KeyBinding::new(&format!("{modifier}-e"), ExportEvidence, Some("AuJitter")),
-                KeyBinding::new(&format!("{modifier}-q"), Quit, None),
-            ]);
-            cx.on_action(|_: &Quit, cx| cx.quit());
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
+fn activate_native_window(window: &mut Window) {
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            IsWindowVisible, SW_SHOW, ShowWindowAsync,
+        };
+        if let Ok(handle) = HasWindowHandle::window_handle(window)
+            && let RawWindowHandle::Win32(handle) = handle.as_raw()
+        {
+            // This is our own live GPUI window, on its owning UI thread. A launcher's
+            // hidden STARTUPINFO can override the first show; explicit Open must win.
+            // Preserve the placement of windows that are already visible/minimized.
+            unsafe {
+                let hwnd = handle.hwnd.get() as _;
+                if IsWindowVisible(hwnd) == 0 {
+                    ShowWindowAsync(hwnd, SW_SHOW);
+                    ShowWindowAsync(hwnd, SW_SHOW);
                 }
-            })
-            .detach();
-            // Fixed pixels here are the native window boundary, not component geometry.
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                    None,
-                    size(px(1180.0), px(800.0)),
-                    cx,
-                ))),
-                window_min_size: Some(size(px(900.0), px(600.0))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("AuJitter".into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            };
-            gpui_kit::open_window(options, cx, |window, cx| {
-                cx.new(|cx| NetworkWindow::new(window, cx))
-            })
-            .expect("Could not open AuJitter window");
+            }
+        }
+    }
+    window.activate_window();
+}
+
+fn show_window(session: Entity<DesktopState>, cx: &mut App) {
+    tracing::debug!(windows = cx.windows().len(), "Showing AuJitter window");
+    if let Some(handle) = cx.windows().into_iter().next() {
+        let _ = handle.update(cx, |_, window, cx| {
+            activate_native_window(window);
             cx.activate(true);
         });
+        return;
+    }
+    // Fixed pixels here are the native window boundary, not component geometry.
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            size(px(1180.0), px(800.0)),
+            cx,
+        ))),
+        window_min_size: Some(size(px(900.0), px(600.0))),
+        titlebar: Some(TitlebarOptions {
+            title: Some("AuJitter".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let owner = session.clone();
+    match gpui_kit::open_window(options, cx, move |window, cx| {
+        cx.new(|cx| NetworkWindow::new(owner, window, cx))
+    }) {
+        Ok((handle, _)) => {
+            let _ = handle.update(cx, |_, window, cx| {
+                activate_native_window(window);
+                cx.activate(true);
+            });
+            tracing::info!("AuJitter window opened");
+        }
+        Err(error) => {
+            tracing::error!(%error, "Could not open AuJitter window");
+            session.update(cx, |session, cx| {
+                session.live.error = Some(format!("Could not open AuJitter: {error}"));
+                session.live.notice =
+                    "Use Open web dashboard from the tray to view monitoring.".into();
+                cx.notify();
+            });
+        }
+    }
+}
+
+pub fn run() {
+    let background = std::env::args().any(|arg| arg == "--background");
+    let instance = match DesktopInstance::acquire(background) {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("Could not start AuJitter desktop: {error:#}");
+            return;
+        }
+    };
+    let request_path = instance.request_path();
+    let tray_support = tray::check_support();
+    let app = gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .with_quit_mode(QuitMode::Explicit);
+    app.on_reopen(|cx| {
+        let session = cx.global::<DesktopSession>().0.clone();
+        show_window(session, cx);
+    });
+    app.run(move |cx| {
+        gpui_kit::init(cx);
+        let session = cx.new(|cx| DesktopState::new(request_path, tray_support, cx));
+        cx.set_global(DesktopSession(session.clone()));
+        let modifier = if cfg!(target_os = "macos") {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        cx.bind_keys([
+            KeyBinding::new(&format!("{modifier}-g"), ToggleGaming, Some("AuJitter")),
+            KeyBinding::new(&format!("{modifier}-p"), TogglePause, Some("AuJitter")),
+            KeyBinding::new(&format!("{modifier}-e"), ExportEvidence, Some("AuJitter")),
+            KeyBinding::new(&format!("{modifier}-q"), Quit, None),
+        ]);
+        cx.on_action(|_: &Quit, cx| {
+            let session = cx.global::<DesktopSession>().0.clone();
+            session.update(cx, |session, cx| {
+                session.handle_action(TrayAction::Quit, cx)
+            });
+        });
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() && cx.global::<DesktopSession>().0.read(cx).tray.is_none() {
+                cx.quit();
+            }
+        })
+        .detach();
+        cx.on_app_quit(|cx| {
+            let session = cx.global::<DesktopSession>().0.clone();
+            session.update(cx, |session, _| {
+                session.tray.take();
+            });
+            async {}
+        })
+        .detach();
+        if !background || session.read(cx).tray.is_none() {
+            show_window(session, cx);
+        }
+    });
+    drop(instance);
 }
