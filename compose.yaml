@@ -1,0 +1,24 @@
+services:
+  aujitter:
+    image: ghcr.io/peppermintish/aujitter:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9876:9876"
+    environment:
+      AUJITTER_TOKEN: ${AUJITTER_TOKEN:?Set a random access token of at least 24 characters in .env}
+    volumes:
+      - aujitter-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 64
+volumes:
+  aujitter-data:

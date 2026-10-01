@@ -1,0 +1,10 @@
+.git
+target
+dist
+build
+artifacts
+.local
+.env
+*.sqlite3*
+*.pfx
+*.cer

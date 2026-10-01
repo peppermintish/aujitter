@@ -1,0 +1,90 @@
+name: Container images
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  image:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, platform: linux/amd64, arch: amd64 }
+          - { runner: ubuntu-24.04-arm, platform: linux/arm64, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=docker
+          tags: aujitter:test
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+      - name: Run container health and shutdown checks
+        run: |
+          docker run --rm aujitter:test --version
+          docker run -d --name aujitter-smoke -e AUJITTER_TOKEN=ci-only-unique-test-token-32-characters -p 127.0.0.1:9876:9876 aujitter:test
+          python3 scripts/container-smoke.py
+          docker stop -t 15 aujitter-smoke
+          test "$(docker inspect --format='{{.State.ExitCode}}' aujitter-smoke)" = 0
+      - name: Push per-architecture image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.title=AuJitter
+  manifest:
+    if: github.event_name != 'pull_request'
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish manifest for both architectures
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          args=(--tag "$IMAGE:sha-$COMMIT")
+          if [[ "$REF_TYPE" == branch && "$REF_NAME" == "$DEFAULT_BRANCH" ]]; then args+=(--tag "$IMAGE:latest"); fi
+          if [[ "$REF_TYPE" == tag && "$REF_NAME" == v* ]]; then
+            python3 scripts/check-release.py "$REF_NAME"
+            args+=(--tag "$IMAGE:${REF_NAME#v}" --tag "$IMAGE:latest")
+          fi
+          docker buildx imagetools create "${args[@]}" "$IMAGE:sha-$COMMIT-amd64" "$IMAGE:sha-$COMMIT-arm64"

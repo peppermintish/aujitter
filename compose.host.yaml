@@ -1,0 +1,7 @@
+# Optional Linux-only override. Docker Desktop still observes a VM/container network.
+services:
+  aujitter:
+    network_mode: host
+    ports: !reset []
+    sysctls: !reset {}
+    command: ["run", "--bind", "127.0.0.1:9876"]

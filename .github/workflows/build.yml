@@ -1,0 +1,85 @@
+name: Native packages
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
+      - run: cargo test --locked --no-default-features
+      - run: python3 scripts/check-assets.py
+  package:
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: windows, arch: x64, runner: windows-2025, target: x86_64-pc-windows-msvc }
+          - { platform: windows, arch: arm64, runner: windows-11-arm, target: aarch64-pc-windows-msvc }
+          - { platform: macos, arch: x64, runner: macos-15-intel, target: x86_64-apple-darwin }
+          - { platform: macos, arch: arm64, runner: macos-15, target: aarch64-apple-darwin }
+          - { platform: linux, arch: x64, runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { platform: linux, arch: arm64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Linux native libraries
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake pkg-config libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libwayland-dev libvulkan-dev libfontconfig1-dev libfreetype6-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.target }}
+      - name: Test on the native architecture
+        run: cargo test --locked --no-default-features --target ${{ matrix.target }}
+      - name: Build CLI and GPUI desktop
+        run: cargo build --locked --release --features desktop --bins --target ${{ matrix.target }}
+      - name: Exercise the packaged service
+        shell: bash
+        run: python3 scripts/smoke.py target/${{ matrix.target }}/release/aujitter${{ matrix.platform == 'windows' && '.exe' || '' }}
+      - name: Create installers and checksums
+        shell: bash
+        run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: AuJitter-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: AuJitter-*
+          path: dist
+          merge-multiple: true
+      - name: Verify tag and publish release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 scripts/check-release.py "$RELEASE_TAG"
+          gh release create "$RELEASE_TAG" dist/* --title "AuJitter $RELEASE_TAG" --notes-file docs/release-notes.md --verify-tag

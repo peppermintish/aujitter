@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AuJitter
+Comment=Quiet network monitoring and incident history
+Exec=aujitter-gui
+Icon=aujitter
+Terminal=false
+Categories=Network;Utility;
