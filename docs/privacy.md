@@ -6,6 +6,8 @@ Stored samples can contain local interface names, local IP addresses, gateway an
 
 Connectivity tests send minimal ICMP/TCP traffic to configured targets and a DNS query for `example.com` to a configured resolver. Defaults are Cloudflare and Google public IPs. Those destinations and intervening networks can observe the connection's public address and traffic. No browser history, packet payloads, game traffic or passwords are read. Optional discovery uses LAN SSDP and reads UPnP IGD metadata and two read-only actions from the gateway. It is off by default.
 
+Automatic preset selection uses the default-route adapter's type/name and available WAN evidence. It does not read running application names or processes. Its choice, reason, timeout and warning thresholds are recorded with new samples; it does not contact an ISP-identification service.
+
 Manual export writes an evidence file locally; it does not send it to an ISP or support service. Review local addresses and labels before sharing. Web/native export is a clearly described recent snapshot; CLI export can include every retained record. You control copying and sending these files.
 
 The desktop service listens only on 127.0.0.1 by default. A non-loopback listener requires an access token of at least 24 characters. The supplied Compose setup publishes only to localhost and requires a token. Do not expose plain HTTP and its token to the public internet; use a private trusted network or your own HTTPS reverse proxy. Browser tokens are held in session storage for that tab, not saved in settings or history. Tokens passed through environment variables must be protected by the container host.

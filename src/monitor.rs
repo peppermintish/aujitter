@@ -1,7 +1,11 @@
 use crate::{
     config::Settings,
     diagnosis::Analyzer,
-    model::{Dashboard, Incident, Probe, ProbeKind, ProbeState, Sample, Severity, Topology},
+    model::{
+        Dashboard, Incident, MonitoringProfile, Probe, ProbeKind, ProbeState, Sample, Severity,
+        Topology,
+    },
+    presets::{self, Preset},
     probe, router,
     store::Store,
     topology,
@@ -69,12 +73,36 @@ pub fn initial_dashboard(settings: &Settings) -> Dashboard {
         paused: settings.paused,
         gaming: settings.gaming,
         interval_ms: settings.effective_interval_ms(),
+        preset: settings.preset,
+        effective_preset: if settings.preset == Preset::Automatic {
+            Preset::Everyday
+        } else {
+            settings.preset
+        },
+        preset_reason: (settings.preset == Preset::Automatic)
+            .then(|| "Waiting for connection information. Using Everyday timing.".into()),
         latest: None,
         recent: vec![],
         incidents: vec![],
         hourly: vec![],
         error: None,
     }
+}
+
+pub fn refresh_profile(view: &mut Dashboard, settings: &Settings) -> Result<()> {
+    let topology = view
+        .latest
+        .as_ref()
+        .map(|row| row.topology.clone())
+        .unwrap_or_default();
+    let resolved = presets::resolve(settings, &topology)?;
+    view.paused = settings.paused;
+    view.gaming = settings.gaming;
+    view.preset = settings.preset;
+    view.effective_preset = resolved.settings().preset;
+    view.preset_reason = resolved.reason().map(str::to_owned);
+    view.interval_ms = resolved.settings().effective_interval_ms();
+    Ok(())
 }
 
 pub async fn collect(settings: &Settings, topology: Topology, analyzer: &mut Analyzer) -> Sample {
@@ -137,6 +165,13 @@ pub async fn collect(settings: &Settings, topology: Topology, analyzer: &mut Ana
         metrics,
         diagnosis,
         observation_gap_seconds: None,
+        monitoring_profile: Some(MonitoringProfile {
+            preset: settings.preset,
+            reason: None,
+            timeout_ms: settings.timeout_ms,
+            latency_warning_ms: settings.latency_warning_ms,
+            jitter_warning_ms: settings.jitter_warning_ms,
+        }),
     }
 }
 
@@ -156,6 +191,7 @@ pub async fn run(
     let mut incidents = IncidentTracker::default();
     let mut recent = VecDeque::new();
     let mut previous_at: Option<DateTime<Utc>> = None;
+    let mut previous_interval_ms = 0;
     let mut samples = 0;
     let mut detected = Topology::default();
     let mut last_topology = Instant::now() - Duration::from_secs(60);
@@ -170,12 +206,10 @@ pub async fn run(
             break;
         }
         let started = Instant::now();
-        let current = settings.read().await.clone();
+        let mut current = settings.read().await.clone();
         {
             let mut view = dashboard.write().await;
-            view.paused = current.paused;
-            view.gaming = current.gaming;
-            view.interval_ms = current.effective_interval_ms();
+            refresh_profile(&mut view, &current)?;
         }
         if current.paused {
             if !was_paused {
@@ -253,7 +287,21 @@ pub async fn run(
                 detected.router_model = None;
                 detected.router_wan_connected = None;
             }
-            let gap = observation_gap(previous_at, Utc::now(), current.effective_interval_ms());
+            let configured_preset = current.preset;
+            let resolved = presets::resolve(&current, &detected)?;
+            current = resolved.settings().clone();
+            {
+                let mut view = dashboard.write().await;
+                view.preset = configured_preset;
+                view.effective_preset = current.preset;
+                view.preset_reason = resolved.reason().map(str::to_owned);
+                view.interval_ms = current.effective_interval_ms();
+            }
+            let gap = observation_gap(
+                previous_at,
+                Utc::now(),
+                previous_interval_ms.max(current.effective_interval_ms()),
+            );
             if gap.is_some() {
                 store.close_interrupted(
                     previous_at.unwrap_or_else(Utc::now),
@@ -263,6 +311,9 @@ pub async fn run(
                 analyzer.reset();
             }
             let mut sample = collect(&current, detected.clone(), &mut analyzer).await;
+            if let Some(profile) = &mut sample.monitoring_profile {
+                profile.reason = resolved.reason().map(str::to_owned);
+            }
             let elapsed = previous_at
                 .map(|at| sample.at.signed_duration_since(at).num_milliseconds() as f64 / 1000.0)
                 .unwrap_or(0.0);
@@ -274,13 +325,12 @@ pub async fn run(
                 if sample.observation_gap_seconds.is_some() {
                     0.0
                 } else {
-                    elapsed
-                        .max(0.0)
-                        .min(current.effective_interval_ms() as f64 / 1000.0)
+                    elapsed.max(0.0).min(previous_interval_ms as f64 / 1000.0)
                 },
             )?;
             incidents.after_record();
             previous_at = Some(sample.at);
+            previous_interval_ms = current.effective_interval_ms();
             tracing::info!(severity = ?sample.diagnosis.severity, area = %sample.diagnosis.area, latency_ms = ?sample.metrics.latency_ms, "Network sample recorded");
             recent.push_back(sample.clone());
             if recent.len() > 120 {
@@ -357,6 +407,7 @@ mod tests {
             metrics: Default::default(),
             diagnosis: Default::default(),
             observation_gap_seconds: None,
+            monitoring_profile: None,
         };
         sample.diagnosis.severity = Severity::Watch;
         tracker.observe(&sample);

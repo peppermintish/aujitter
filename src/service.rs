@@ -154,6 +154,8 @@ async fn update_settings(State(state): State<AppState>, Json(value): Json<Settin
         value.preset = crate::presets::Preset::Custom;
     }
     save_settings(&state, value).await.map_err(api_error)?;
+    let value = state.settings.read().await;
+    monitor::refresh_profile(&mut *state.dashboard.write().await, &value).map_err(api_error)?;
     Ok(Json(serde_json::json!({"saved":true})))
 }
 #[derive(Deserialize)]
@@ -171,8 +173,7 @@ async fn apply_preset(
     save_settings(&state, value).await.map_err(api_error)?;
     let value = state.settings.read().await;
     let mut view = state.dashboard.write().await;
-    view.gaming = value.gaming;
-    view.interval_ms = value.effective_interval_ms();
+    monitor::refresh_profile(&mut view, &value).map_err(api_error)?;
     Ok(Json(
         serde_json::json!({"saved":true,"preset":value.preset}),
     ))
@@ -195,9 +196,7 @@ async fn control(State(state): State<AppState>, Json(control): Json<Control>) ->
     save_settings(&state, value).await.map_err(api_error)?;
     let value = state.settings.read().await;
     let mut view = state.dashboard.write().await;
-    view.paused = value.paused;
-    view.gaming = value.gaming;
-    view.interval_ms = value.effective_interval_ms();
+    monitor::refresh_profile(&mut view, &value).map_err(api_error)?;
     Ok(Json(serde_json::json!({"saved":true})))
 }
 async fn shutdown(State(state): State<AppState>) -> Json<serde_json::Value> {

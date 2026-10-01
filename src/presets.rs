@@ -1,5 +1,8 @@
 //! One preset catalogue shared by CLI, HTTP and the native desktop.
-use crate::config::Settings;
+use crate::{
+    config::Settings,
+    model::{AccessType, ConnectionHint, Topology},
+};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +10,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum Preset {
     #[default]
+    Automatic,
     Everyday,
     Gaming,
     Calls,
@@ -38,6 +42,7 @@ pub struct PresetInfo {
 pub fn catalogue() -> Vec<PresetInfo> {
     use Preset::*;
     [
+        (Automatic, "Automatic", "Choose Everyday, mobile, satellite or VPN timing from connection evidence. Uses no application detection. Gaming mode remains your choice; shown values are the Everyday fallback.", 5000, 15000, 1000, 150.0, 30.0, false),
         (Everyday, "Everyday", "Balanced monitoring for most home connections. One cycle every 5 seconds.", 5000, 15000, 1000, 150.0, 30.0, false),
         (Gaming, "Gaming", "Low traffic during a match. One cycle every 15 seconds; router reads are skipped. These are test-target timings, not game-server timings.", 5000, 15000, 1000, 150.0, 30.0, true),
         (Calls, "Video calls & work", "Notice delay and variation that can disturb calls. Checks every 5 seconds; does not test audio or video throughput.", 5000, 15000, 1000, 100.0, 20.0, false),
@@ -70,7 +75,9 @@ impl Preset {
         settings.timeout_ms = info.timeout_ms;
         settings.latency_warning_ms = info.latency_warning_ms;
         settings.jitter_warning_ms = info.jitter_warning_ms;
-        settings.gaming = info.gaming;
+        if self != Self::Automatic {
+            settings.gaming = info.gaming;
+        }
         settings.preset = self;
         // Preserve pause, network identity, overrides, targets, retention and router opt-in.
         settings.validate()
@@ -84,6 +91,82 @@ impl Preset {
                 && settings.jitter_warning_ms == info.jitter_warning_ms
         })
     }
+}
+
+/// Runtime choices never replace the user's saved Automatic preference.
+pub struct ResolvedPreset {
+    settings: Settings,
+    reason: Option<String>,
+}
+impl ResolvedPreset {
+    pub fn settings(&self) -> &Settings {
+        &self.settings
+    }
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+}
+
+pub fn resolve(settings: &Settings, topology: &Topology) -> anyhow::Result<ResolvedPreset> {
+    if settings.preset != Preset::Automatic {
+        return Ok(ResolvedPreset {
+            settings: settings.clone(),
+            reason: None,
+        });
+    }
+    // A new manual label overrides cached router information. Disabling discovery
+    // also stops using its metadata, including metadata in the previous sample.
+    let access = if settings.access_type != AccessType::Unknown {
+        settings.access_type
+    } else if settings.discover_router
+        && topology.access_evidence != "User configured connection type."
+    {
+        topology.access_type
+    } else {
+        AccessType::Unknown
+    };
+    let (preset, reason) = if topology.connection_hint == ConnectionHint::Tunnel {
+        (Preset::Vpn, "The default-route adapter is a tunnel or has a VPN adapter name. Using VPN / work timing; split tunnels may not be visible.".to_string())
+    } else if access == AccessType::Satellite {
+        (
+            Preset::Satellite,
+            "The configured or reported WAN type is satellite. Using Satellite timing.".to_string(),
+        )
+    } else if matches!(
+        access,
+        AccessType::FiveG | AccessType::FourG | AccessType::FixedWireless
+    ) || topology.connection_hint == ConnectionHint::MobileBroadband
+    {
+        (Preset::Mobile, "A mobile broadband adapter or configured/reported wireless WAN was found. Using 5G / 4G timing; the radio generation is only shown when known.".to_string())
+    } else if access != AccessType::Unknown {
+        (
+            Preset::Everyday,
+            "The configured or reported wired WAN uses Everyday timing.".to_string(),
+        )
+    } else if topology.container {
+        (Preset::Everyday, "Only the container's connection is visible; the host WAN is unknown. Using Everyday timing.".to_string())
+    } else if topology.interface.is_some() {
+        (
+            Preset::Everyday,
+            format!(
+                "{} detected; the router's WAN technology is unknown. Using Everyday timing.",
+                topology.local_transport
+            ),
+        )
+    } else {
+        (
+            Preset::Everyday,
+            "Connection information is unavailable. Using Everyday timing until evidence changes."
+                .to_string(),
+        )
+    };
+    let mut effective = settings.clone();
+    preset.apply(&mut effective)?;
+    effective.gaming = settings.gaming;
+    Ok(ResolvedPreset {
+        settings: effective,
+        reason: Some(reason),
+    })
 }
 
 #[cfg(test)]
@@ -113,5 +196,69 @@ mod tests {
         assert!(settings.gaming);
         assert_eq!(settings.effective_interval_ms(), 15000);
         assert_eq!(settings.access_type, crate::model::AccessType::Unknown);
+    }
+    #[test]
+    fn automatic_uses_evidence_and_never_equates_wifi_with_cellular() {
+        let mut settings = Settings::default();
+        let mut topology = Topology {
+            interface: Some("Wi-Fi".into()),
+            local_transport: "Wi-Fi".into(),
+            ..Default::default()
+        };
+        let selected = resolve(&settings, &topology).unwrap();
+        assert_eq!(selected.settings().preset, Preset::Everyday);
+        assert!(selected.reason().unwrap().contains("unknown"));
+        topology.router_model = Some("5G capable router".into());
+        assert_eq!(
+            resolve(&settings, &topology).unwrap().settings().preset,
+            Preset::Everyday
+        );
+        topology.connection_hint = ConnectionHint::MobileBroadband;
+        assert_eq!(
+            resolve(&settings, &topology).unwrap().settings().preset,
+            Preset::Mobile
+        );
+        topology.connection_hint = ConnectionHint::Unknown;
+        topology.access_type = AccessType::Satellite;
+        // No stale router metadata is used after opt-out.
+        assert_eq!(
+            resolve(&settings, &topology).unwrap().settings().preset,
+            Preset::Everyday
+        );
+        settings.discover_router = true;
+        assert_eq!(
+            resolve(&settings, &topology).unwrap().settings().preset,
+            Preset::Satellite
+        );
+        settings.access_type = AccessType::FiveG;
+        assert_eq!(
+            resolve(&settings, &topology).unwrap().settings().preset,
+            Preset::Mobile
+        );
+        topology.connection_hint = ConnectionHint::Tunnel;
+        assert_eq!(
+            resolve(&settings, &topology).unwrap().settings().preset,
+            Preset::Vpn
+        );
+        settings.preset = Preset::Quiet;
+        assert_eq!(
+            resolve(&settings, &topology).unwrap().settings().preset,
+            Preset::Quiet
+        );
+    }
+    #[test]
+    fn automatic_preserves_gaming_and_never_writes_a_detected_choice() {
+        let mut settings = Settings {
+            gaming: true,
+            paused: true,
+            access_type: AccessType::FiveG,
+            ..Default::default()
+        };
+        Preset::Automatic.apply(&mut settings).unwrap();
+        let selected = resolve(&settings, &Topology::default()).unwrap();
+        assert!(selected.settings().gaming && selected.settings().paused);
+        assert_eq!(selected.settings().effective_interval_ms(), 30000);
+        assert_eq!(settings.preset, Preset::Automatic);
+        assert_eq!(settings.access_type, AccessType::FiveG);
     }
 }

@@ -122,6 +122,16 @@ fn request(client: &reqwest::Client, token: Option<&str>, url: &str) -> reqwest:
     }
 }
 fn status(view: &Dashboard) {
+    println!(
+        "Preset: {} → {} | every {} seconds{}",
+        view.preset.name(),
+        view.effective_preset.name(),
+        view.interval_ms / 1000,
+        if view.gaming { " | Gaming mode on" } else { "" }
+    );
+    if let Some(reason) = &view.preset_reason {
+        println!("{reason}");
+    }
     if view.paused {
         println!("Paused — the monitor is not sending probes");
     }
@@ -289,17 +299,19 @@ async fn main() -> Result<()> {
         }
         Commands::Once { json } => {
             let settings = Settings::load(&config_path)?;
-            let sample = monitor::collect(
-                &settings,
-                topology::detect(&settings),
-                &mut Analyzer::default(),
-            )
-            .await;
+            let detected = topology::detect(&settings);
+            let resolved = aujitter::presets::resolve(&settings, &detected)?;
+            let mut sample =
+                monitor::collect(resolved.settings(), detected, &mut Analyzer::default()).await;
+            if let Some(profile) = &mut sample.monitoring_profile {
+                profile.reason = resolved.reason().map(str::to_owned);
+            }
             if json {
                 println!("{}", serde_json::to_string_pretty(&sample)?);
             } else {
                 let mut view = monitor::initial_dashboard(&settings);
                 view.latest = Some(sample);
+                monitor::refresh_profile(&mut view, &settings)?;
                 status(&view);
             }
         }

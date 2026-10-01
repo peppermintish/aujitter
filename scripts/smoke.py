@@ -57,11 +57,23 @@ with tempfile.TemporaryDirectory(prefix="aujitter-smoke-") as directory:
         assert json.loads(config.read_text())["gaming"] is True
         with request("/api/presets") as response:
             presets = json.load(response)
-            assert len(presets) >= 11
+            assert len(presets) >= 12 and any(item["id"] == "automatic" for item in presets)
         with request("/api/preset", "POST", {"preset": "gaming"}) as response:
             assert json.load(response)["preset"] == "gaming"
         saved = json.loads(config.read_text())
         assert saved["paused"] and saved["gaming"] and saved["gaming_interval_ms"] == 15000
+        # Automatic adapts at runtime and keeps the saved selector and manual controls.
+        with request("/api/preset", "POST", {"preset": "automatic"}) as response:
+            assert json.load(response)["preset"] == "automatic"
+        saved = json.loads(config.read_text())
+        assert saved["paused"] and saved["gaming"] and saved["preset"] == "automatic"
+        saved["access_type"] = "satellite"
+        with request("/api/settings", "POST", saved) as response:
+            assert json.load(response)["saved"]
+        with request("/api/dashboard") as response:
+            view = json.load(response)
+            assert view["effective_preset"] == "satellite" and view["interval_ms"] == 30000
+        assert json.loads(config.read_text())["preset"] == "automatic"
         try:
             with request("/api/settings", "POST", {"interval_ms": 10}) as response:
                 raise AssertionError("Invalid settings accepted")

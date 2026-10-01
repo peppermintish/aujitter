@@ -18,6 +18,7 @@ Opening the desktop starts the monitor. Closing the desktop or browser leaves it
 aujitter start
 aujitter status
 aujitter presets
+aujitter preset automatic
 aujitter preset gaming
 aujitter control gaming-on
 aujitter control pause
@@ -34,7 +35,9 @@ The browser dashboard is at **http://127.0.0.1:9876**. CLI `run` stays in the fo
 
 Built-in **situation presets** cover everyday use, gaming, video calls, streaming, Wi-Fi investigation, recurring dropouts, 5G/4G, satellite, quiet/limited-data connections, VPN/work networks and unattended servers. Apply one in native/web Settings or with the CLI. Presets adjust timing, timeouts and warning thresholds while preserving network settings, local retention, router permission and pause state. Values remain editable; edited timings are labelled Custom. See the [preset guide](docs/presets.md).
 
-Every 5 seconds by default, the monitor sends one echo to the gateway, one to an internet target, makes small TCP connection checks to two independent targets on port 443, and sends one DNS query to the configured resolver. A second DNS resolver is consulted only if the first fails. Probes have a 1-second timeout and run concurrently; slow probes never create a catch-up burst.
+**Automatic** is the default for new installations. It chooses everyday, mobile, satellite or VPN timing from the default-route adapter and available WAN evidence, and displays the reason. It uses connection information only and does not read running application names. Wi-Fi behind an unidentified router uses everyday timing; AuJitter never assumes it is 5G. Gaming mode remains a manual switch and is preserved when you choose Automatic.
+
+Every 5 seconds in the default everyday fallback, the monitor sends one echo to the gateway, one to an internet target, makes small TCP connection checks to two independent targets on port 443, and sends one DNS query to the configured resolver. A second DNS resolver is consulted only if the first fails. Probes have a 1-second timeout in this profile and run concurrently; slow probes never create a catch-up burst. Other presets adjust the interval, timeout and warning thresholds.
 
 **Gaming mode** increases the interval to 15 seconds and skips optional router discovery and router reads. There are no speed tests, large downloads, packet capture, game hooks, continuous animations, or automatic traceroutes. Some traffic and CPU are unavoidable, so zero gaming impact cannot be guaranteed. Pause sends no measurement probes. GUI/web refreshes are local and limited to 5 seconds.
 

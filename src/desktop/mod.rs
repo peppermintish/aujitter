@@ -793,12 +793,14 @@ impl NetworkWindow {
             .preferences
             .as_ref()
             .map(|s| s.preset)
-            .unwrap_or(Preset::Everyday);
+            .unwrap_or(Preset::Automatic);
         div().flex().flex_col().gap_6()
             .child(div().text_lg().child(format!("Situation preset · {}", active.name())))
             .child(div().flex().gap_3().child(div().flex_1().child(Select::new(&self.preset).accessibility_label("Situation preset").placeholder("Choose a situation"))).child(Button::new("apply-preset").primary().label("Apply preset").on_click(cx.listener(|this,_,window,cx|this.apply_preset(window,cx)))))
             .child(div().text_sm().text_color(cx.theme().muted_foreground).child(description))
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(self.live.view.as_ref().filter(|_| active == Preset::Automatic).and_then(|view| view.preset_reason.clone()).unwrap_or_default()))
             .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Presets change timing and warnings. They preserve your ISP, connection type, router/DNS overrides, history retention, router permission, and pause state."))
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Automatic uses connection information only. Gaming remains a manual switch. Editing timing or warning values selects Custom preferences."))
             .child(Form::new().columns(2)
             .child(Field::new().label("ISP label").child(Input::new(&self.isp)))
             .child(Field::new().label("Router IP override").child(Input::new(&self.gateway)))
@@ -910,6 +912,40 @@ impl Render for NetworkWindow {
                         ),
                 ),
         );
+        if let Some(view) = &self.live.view {
+            content = content.child(
+                div()
+                    .px_6()
+                    .pb_3()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!(
+                        "{}{} · every {}s{}",
+                        if view.preset == Preset::Automatic {
+                            "Automatic → "
+                        } else {
+                            ""
+                        },
+                        view.effective_preset.name(),
+                        view.interval_ms / 1000,
+                        if view.gaming {
+                            " · Gaming mode on"
+                        } else {
+                            ""
+                        }
+                    )),
+            );
+            if let Some(reason) = &view.preset_reason {
+                content = content.child(
+                    div()
+                        .px_6()
+                        .pb_3()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(reason.clone()),
+                );
+            }
+        }
         if let Some(error) = &self.live.error {
             content = content.child(
                 div()

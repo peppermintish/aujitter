@@ -193,7 +193,25 @@ mod tests {
             metrics: Metrics::default(),
             diagnosis,
             observation_gap_seconds: None,
+            monitoring_profile: None,
         }
+    }
+    #[test]
+    fn history_from_before_automatic_mode_remains_readable() {
+        let row = sample(Utc::now(), Severity::Degraded);
+        let mut legacy = serde_json::to_value(row).unwrap();
+        legacy.as_object_mut().unwrap().remove("monitoring_profile");
+        legacy["topology"]
+            .as_object_mut()
+            .unwrap()
+            .remove("connection_hint");
+        let recovered: Sample = serde_json::from_value(legacy).unwrap();
+        assert!(recovered.monitoring_profile.is_none());
+        assert_eq!(
+            recovered.topology.connection_hint,
+            crate::model::ConnectionHint::Unknown
+        );
+        assert_eq!(recovered.diagnosis.severity, Severity::Degraded);
     }
     #[test]
     fn retains_incidents_after_raw_sample_expiry_and_recovers_after_restart() {

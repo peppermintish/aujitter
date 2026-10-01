@@ -19,11 +19,22 @@ pub enum AccessType {
     Satellite,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionHint {
+    #[default]
+    Unknown,
+    MobileBroadband,
+    Tunnel,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 pub struct Topology {
     pub interface: Option<String>,
     pub local_transport: String,
+    #[serde(default)]
+    pub connection_hint: ConnectionHint,
     pub local_addresses: Vec<String>,
     pub gateway: Option<String>,
     pub dns_server: Option<String>,
@@ -165,6 +176,19 @@ pub struct Sample {
     pub metrics: Metrics,
     pub diagnosis: Diagnosis,
     pub observation_gap_seconds: Option<f64>,
+    /// Older history has no profile metadata; leave it explicitly unavailable.
+    #[serde(default)]
+    pub monitoring_profile: Option<MonitoringProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct MonitoringProfile {
+    pub preset: crate::presets::Preset,
+    pub reason: Option<String>,
+    pub timeout_ms: u64,
+    pub latency_warning_ms: f64,
+    pub jitter_warning_ms: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +223,12 @@ pub struct Dashboard {
     pub paused: bool,
     pub gaming: bool,
     pub interval_ms: u64,
+    #[serde(default)]
+    pub preset: crate::presets::Preset,
+    #[serde(default)]
+    pub effective_preset: crate::presets::Preset,
+    #[serde(default)]
+    pub preset_reason: Option<String>,
     pub latest: Option<Sample>,
     pub recent: Vec<Sample>,
     pub incidents: Vec<Incident>,

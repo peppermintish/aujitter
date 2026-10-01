@@ -25,8 +25,12 @@ impl Analyzer {
         settings: &Settings,
     ) -> (Metrics, Diagnosis) {
         let route = format!(
-            "{:?}/{:?}/{:?}/{:?}",
-            topology.interface, topology.gateway, topology.dns_server, settings.internet_targets
+            "{:?}/{:?}/{:?}/{:?}/{:?}",
+            topology.interface,
+            topology.gateway,
+            topology.dns_server,
+            topology.access_type,
+            settings.internet_targets
         );
         if self.route != route {
             self.reset();
@@ -426,6 +430,17 @@ mod tests {
         let mut t = topology();
         t.gateway = Some("10.0.0.1".into());
         let (_, d) = analyzer.observe(Utc::now(), &t, &probes(false, 0), &Settings::default());
+        assert_eq!(d.area, "unknown");
+    }
+    #[test]
+    fn wan_type_change_starts_a_new_comparison_window() {
+        let mut analyzer = Analyzer::default();
+        let mut t = topology();
+        analyzer.observe(Utc::now(), &t, &probes(true, 2), &Settings::default());
+        t.access_type = crate::model::AccessType::FiveG;
+        let (metrics, d) =
+            analyzer.observe(Utc::now(), &t, &probes(false, 0), &Settings::default());
+        assert_eq!(metrics.window_samples, 1);
         assert_eq!(d.area, "unknown");
     }
     #[test]

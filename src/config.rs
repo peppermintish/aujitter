@@ -32,7 +32,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            preset: crate::presets::Preset::Everyday,
+            preset: crate::presets::Preset::Automatic,
             interval_ms: 5000,
             gaming_interval_ms: 15000,
             timeout_ms: 1000,
