@@ -142,7 +142,10 @@ def main():
     stage = fresh_stage(name)
     globals()[args.platform](stage, binaries, name, version, args.arch)
     for file in sorted((ROOT / "dist").glob(name + ".*")) + sorted((ROOT / "dist").glob(name + "-store.msix")):
-        digest = hashlib.file_digest(file.open("rb"), "sha256").hexdigest()
+        if file.suffix == ".sha256":
+            continue
+        with file.open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
         file.with_name(file.name + ".sha256").write_text(f"{digest}  {file.name}\n")
         print(file.name)
 
