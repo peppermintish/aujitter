@@ -11,6 +11,7 @@ use std::{
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct Settings {
+    pub preset: crate::presets::Preset,
     pub interval_ms: u64,
     pub gaming_interval_ms: u64,
     pub timeout_ms: u64,
@@ -31,6 +32,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            preset: crate::presets::Preset::Everyday,
             interval_ms: 5000,
             gaming_interval_ms: 15000,
             timeout_ms: 1000,

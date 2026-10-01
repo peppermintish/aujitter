@@ -17,6 +17,8 @@ Opening the desktop starts the monitor. Closing the desktop or browser leaves it
 ```sh
 aujitter start
 aujitter status
+aujitter presets
+aujitter preset gaming
 aujitter control gaming-on
 aujitter control pause
 aujitter control resume
@@ -29,6 +31,8 @@ aujitter stop
 The browser dashboard is at **http://127.0.0.1:9876**. CLI `run` stays in the foreground; `once --json` checks connectivity without saving history. `startup disable` removes only AuJitter's own sign-in entry. After moving a portable installation, disable and enable its startup preference again.
 
 ## What it measures
+
+Built-in **situation presets** cover everyday use, gaming, video calls, streaming, Wi-Fi investigation, recurring dropouts, 5G/4G, satellite, quiet/limited-data connections, VPN/work networks and unattended servers. Apply one in native/web Settings or with the CLI. Presets adjust timing, timeouts and warning thresholds while preserving network settings, local retention, router permission and pause state. Values remain editable; edited timings are labelled Custom. See the [preset guide](docs/presets.md).
 
 Every 5 seconds by default, the monitor sends one echo to the gateway, one to an internet target, makes small TCP connection checks to two independent targets on port 443, and sends one DNS query to the configured resolver. A second DNS resolver is consulted only if the first fails. Probes have a 1-second timeout and run concurrently; slow probes never create a catch-up burst.
 

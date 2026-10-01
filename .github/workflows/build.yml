@@ -46,6 +46,9 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-${{ matrix.target }}
       - name: Test on the native architecture
         run: cargo test --locked --no-default-features --target ${{ matrix.target }}
       - name: Build CLI and GPUI desktop

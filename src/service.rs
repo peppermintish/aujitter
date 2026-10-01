@@ -149,8 +149,33 @@ async fn save_settings(state: &AppState, value: Settings) -> Result<()> {
 }
 async fn update_settings(State(state): State<AppState>, Json(value): Json<Settings>) -> ApiResult {
     let _serial = state.mutations.lock().await;
+    let mut value = value;
+    if !value.preset.matches(&value) {
+        value.preset = crate::presets::Preset::Custom;
+    }
     save_settings(&state, value).await.map_err(api_error)?;
     Ok(Json(serde_json::json!({"saved":true})))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PresetRequest {
+    preset: crate::presets::Preset,
+}
+async fn apply_preset(
+    State(state): State<AppState>,
+    Json(request): Json<PresetRequest>,
+) -> ApiResult {
+    let _serial = state.mutations.lock().await;
+    let mut value = state.settings.read().await.clone();
+    request.preset.apply(&mut value).map_err(api_error)?;
+    save_settings(&state, value).await.map_err(api_error)?;
+    let value = state.settings.read().await;
+    let mut view = state.dashboard.write().await;
+    view.gaming = value.gaming;
+    view.interval_ms = value.effective_interval_ms();
+    Ok(Json(
+        serde_json::json!({"saved":true,"preset":value.preset}),
+    ))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -272,6 +297,11 @@ pub async fn serve(options: ServiceOptions) -> Result<()> {
         )
         .route("/api/dashboard", get(dashboard))
         .route("/api/settings", get(self::settings).post(update_settings))
+        .route(
+            "/api/presets",
+            get(|| async { Json(crate::presets::catalogue()) }),
+        )
+        .route("/api/preset", post(apply_preset))
         .route("/api/control", post(control))
         .route("/api/export", get(export))
         .route("/api/shutdown", post(shutdown))

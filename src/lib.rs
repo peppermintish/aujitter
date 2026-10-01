@@ -4,6 +4,7 @@ pub mod desktop;
 pub mod diagnosis;
 pub mod model;
 pub mod monitor;
+pub mod presets;
 pub mod probe;
 pub mod router;
 pub mod service;

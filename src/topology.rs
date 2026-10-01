@@ -25,7 +25,15 @@ pub fn detect(settings: &Settings) -> Topology {
                     .clone()
                     .unwrap_or_else(|| interface.name.clone()),
             );
-            result.local_transport = format!("{:?}", interface.if_type);
+            result.local_transport = match interface.if_type {
+                netdev::interface::types::InterfaceType::Wireless80211 => "Wi-Fi".into(),
+                netdev::interface::types::InterfaceType::Ethernet
+                | netdev::interface::types::InterfaceType::Ethernet3Megabit
+                | netdev::interface::types::InterfaceType::FastEthernetT
+                | netdev::interface::types::InterfaceType::FastEthernetFx
+                | netdev::interface::types::InterfaceType::GigabitEthernet => "Ethernet".into(),
+                other => format!("{other:?}"),
+            };
             result.local_addresses = interface
                 .ipv4
                 .iter()

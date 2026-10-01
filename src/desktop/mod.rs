@@ -2,17 +2,19 @@
 use crate::{
     config::{self, Settings},
     model::{Dashboard, ProbeKind, Severity},
+    presets::{self, Preset},
     startup,
 };
 use anyhow::{Context as _, Result};
 use chrono::Local;
 use gpui_kit::component::{
-    ActiveTheme, Selectable, Theme, ThemeMode,
+    ActiveTheme, IndexPath, Selectable, Theme, ThemeMode,
     button::{Button, ButtonVariants},
     chart::LineChart,
     form::{Field, Form},
     input::{Input, InputState},
     scroll::ScrollableElement,
+    select::{Select, SelectEvent, SelectState},
     switch::Switch,
 };
 use gpui_kit::*;
@@ -43,6 +45,7 @@ struct Live {
 enum Operation {
     Control(serde_json::Value),
     Save(Settings),
+    Preset(Preset),
     Export,
     Startup(bool),
 }
@@ -140,7 +143,20 @@ fn worker(shared: Arc<Mutex<Live>>, commands: mpsc::Receiver<Operation>) {
                 request.send()?.error_for_status()?;
                 Ok("Monitoring setting saved".into())
             }
-            Operation::Save(value) => {
+            Operation::Preset(preset) => {
+                let mut call = client
+                    .post("http://127.0.0.1:9876/api/preset")
+                    .json(&serde_json::json!({"preset":preset}));
+                if let Some(token) = &token {
+                    call = call.bearer_auth(token);
+                }
+                call.send()?.error_for_status()?;
+                Ok(format!("{} preset applied", preset.name()))
+            }
+            Operation::Save(mut value) => {
+                let current: Settings = request("settings").send()?.error_for_status()?.json()?;
+                value.paused = current.paused;
+                value.gaming = current.gaming;
                 value.validate()?;
                 let mut request = client
                     .post("http://127.0.0.1:9876/api/settings")
@@ -212,6 +228,8 @@ struct NetworkWindow {
     gaming_interval: Entity<InputState>,
     latency: Entity<InputState>,
     jitter: Entity<InputState>,
+    preset: Entity<SelectState<Vec<SharedString>>>,
+    _preset_subscription: Subscription,
     discover_router: bool,
     _poll: Task<()>,
 }
@@ -285,6 +303,21 @@ impl NetworkWindow {
         let gaming_interval = input("15");
         let latency = input("150");
         let jitter = input("30");
+        let preset = cx.new(|cx| {
+            SelectState::new(
+                presets::catalogue()
+                    .iter()
+                    .map(|item| SharedString::from(item.name))
+                    .collect::<Vec<_>>(),
+                Some(IndexPath::default()),
+                window,
+                cx,
+            )
+        });
+        let preset_subscription = cx
+            .subscribe(&preset, |_, _, _: &SelectEvent<Vec<SharedString>>, cx| {
+                cx.notify()
+            });
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         Self {
@@ -299,6 +332,8 @@ impl NetworkWindow {
             gaming_interval,
             latency,
             jitter,
+            preset,
+            _preset_subscription: preset_subscription,
             discover_router: false,
             _poll: poll,
         }
@@ -329,6 +364,9 @@ impl NetworkWindow {
     }
     fn open_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(settings) = &self.live.preferences {
+            let name = SharedString::from(settings.preset.name());
+            self.preset
+                .update(cx, |state, cx| state.set_selected_value(&name, window, cx));
             for (input, value) in [
                 (&self.isp, settings.isp.clone().unwrap_or_default()),
                 (
@@ -356,6 +394,31 @@ impl NetworkWindow {
         }
         self.page = Page::Preferences;
         cx.notify();
+    }
+    fn apply_preset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(selected) = self.preset.read(cx).selected_value() else {
+            return;
+        };
+        let Some(preset) = presets::catalogue()
+            .into_iter()
+            .find(|p| p.name == selected.as_ref())
+        else {
+            return;
+        };
+        let Some(mut settings) = self.live.preferences.clone() else {
+            return;
+        };
+        match preset.id.apply(&mut settings) {
+            Ok(()) => {
+                self.live.preferences = Some(settings.clone());
+                self.open_preferences(window, cx);
+                self.send(Operation::Preset(preset.id), cx);
+            }
+            Err(error) => {
+                self.live.error = Some(error.to_string());
+                cx.notify();
+            }
+        }
     }
     fn save_preferences(&mut self, cx: &mut Context<Self>) {
         let result: Result<Settings> = (|| {
@@ -719,7 +782,24 @@ impl NetworkWindow {
         content
     }
     fn preferences(&self, cx: &mut Context<Self>) -> Div {
-        div().flex().flex_col().gap_6().child(Form::new().columns(2)
+        let selected = self.preset.read(cx).selected_value();
+        let description = presets::catalogue()
+            .into_iter()
+            .find(|p| selected.is_some_and(|name| p.name == name.as_ref()))
+            .map(|p| p.description)
+            .unwrap_or("Choose a preset, or customise the preferences below.");
+        let active = self
+            .live
+            .preferences
+            .as_ref()
+            .map(|s| s.preset)
+            .unwrap_or(Preset::Everyday);
+        div().flex().flex_col().gap_6()
+            .child(div().text_lg().child(format!("Situation preset · {}", active.name())))
+            .child(div().flex().gap_3().child(div().flex_1().child(Select::new(&self.preset).accessibility_label("Situation preset").placeholder("Choose a situation"))).child(Button::new("apply-preset").primary().label("Apply preset").on_click(cx.listener(|this,_,window,cx|this.apply_preset(window,cx)))))
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(description))
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Presets change timing and warnings. They preserve your ISP, connection type, router/DNS overrides, history retention, router permission, and pause state."))
+            .child(Form::new().columns(2)
             .child(Field::new().label("ISP label").child(Input::new(&self.isp)))
             .child(Field::new().label("Router IP override").child(Input::new(&self.gateway)))
             .child(Field::new().label("DNS IP override").child(Input::new(&self.dns)))

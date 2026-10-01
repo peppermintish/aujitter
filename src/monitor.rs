@@ -39,7 +39,7 @@ impl IncidentTracker {
                 active.diagnosis = sample.diagnosis.clone();
             }
         } else if sample.diagnosis.severity == Severity::Stable {
-            self.healthy_streak += 1;
+            self.healthy_streak = self.healthy_streak.saturating_add(1).min(3);
             if self.healthy_streak >= 3
                 && let Some(active) = &mut self.active
             {
@@ -239,7 +239,12 @@ pub async fn run(
                     last_router_read = Instant::now();
                 }
                 detected.router_model = Some(router.model.clone());
-                detected.router_wan_connected = router.wan_connected;
+                detected.router_wan_connected =
+                    if !current.gaming && last_router_read.elapsed() < Duration::from_secs(120) {
+                        router.wan_connected
+                    } else {
+                        None
+                    };
                 if current.access_type == crate::model::AccessType::Unknown {
                     detected.access_type = router.access_type;
                     detected.access_evidence = router.evidence.clone();
@@ -365,5 +370,10 @@ mod tests {
         sample.at += chrono::Duration::seconds(5);
         tracker.observe(&sample);
         assert!(tracker.active.as_ref().unwrap().ended_at.is_some());
+        tracker.after_record();
+        for _ in 0..1000 {
+            tracker.observe(&sample);
+        }
+        assert!(tracker.active.is_none());
     }
 }

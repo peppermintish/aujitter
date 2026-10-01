@@ -34,6 +34,15 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
+    /// List situation presets (works even when monitoring is stopped).
+    Presets,
+    /// Apply a built-in preset to the running monitor without changing network or retention settings.
+    Preset {
+        #[arg(value_enum)]
+        name: aujitter::presets::Preset,
+        #[arg(long, default_value = "http://127.0.0.1:9876")]
+        url: String,
+    },
     /// Run the monitor and web dashboard; Ctrl+C stops gracefully.
     Run {
         #[arg(long, default_value = "127.0.0.1:9876")]
@@ -229,6 +238,41 @@ async fn main() -> Result<()> {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             bail!("Monitor launched, but startup is not confirmed; inspect the monitor log");
+        }
+        Commands::Presets => {
+            for item in aujitter::presets::catalogue() {
+                let id = serde_json::to_value(item.id)?
+                    .as_str()
+                    .unwrap()
+                    .replace('_', "-");
+                println!(
+                    "{id}: {}\n  {}\n  Effective {}s; timeout {}ms; latency warning {}ms; jitter warning {}ms",
+                    item.name,
+                    item.description,
+                    if item.gaming {
+                        item.gaming_interval_ms
+                    } else {
+                        item.interval_ms
+                    } / 1000,
+                    item.timeout_ms,
+                    item.latency_warning_ms,
+                    item.jitter_warning_ms
+                );
+            }
+        }
+        Commands::Preset { name, url } => {
+            ensure!(
+                name != aujitter::presets::Preset::Custom,
+                "Choose a built-in preset; custom preferences are edited in Settings"
+            );
+            let mut request = client
+                .post(format!("{}/api/preset", url.trim_end_matches('/')))
+                .json(&serde_json::json!({"preset":name}));
+            if let Some(token) = &cli.token {
+                request = request.bearer_auth(token);
+            }
+            request.send().await?.error_for_status()?;
+            println!("Applied {} preset", name.name());
         }
         Commands::Startup { action } => {
             if matches!(action, StartupAction::Status) {

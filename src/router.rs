@@ -86,11 +86,7 @@ fn parse_description(xml: &str, location: &Url, gateway: IpAddr) -> Result<Route
         || model_lower.contains("5g cellular");
     let mut result = RouterDevice {
         model: format!("{manufacturer} {model}").trim().to_string(),
-        access_type: if cellular {
-            AccessType::FiveG
-        } else {
-            AccessType::Unknown
-        },
+        access_type: AccessType::Unknown,
         evidence: if cellular {
             "Router model advertises 5G capability; its active backhaul is not confirmed.".into()
         } else {

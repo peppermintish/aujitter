@@ -55,10 +55,18 @@ with tempfile.TemporaryDirectory(prefix="aujitter-smoke-") as directory:
         with request("/api/control", "POST", {"gaming": True}) as response:
             assert json.load(response)["saved"]
         assert json.loads(config.read_text())["gaming"] is True
-        with request("/api/settings", "POST", {"interval_ms": 10}) as response:
-            raise AssertionError("Invalid settings accepted")
-    except HTTPError as error:
-        assert error.code == 400
+        with request("/api/presets") as response:
+            presets = json.load(response)
+            assert len(presets) >= 11
+        with request("/api/preset", "POST", {"preset": "gaming"}) as response:
+            assert json.load(response)["preset"] == "gaming"
+        saved = json.loads(config.read_text())
+        assert saved["paused"] and saved["gaming"] and saved["gaming_interval_ms"] == 15000
+        try:
+            with request("/api/settings", "POST", {"interval_ms": 10}) as response:
+                raise AssertionError("Invalid settings accepted")
+        except HTTPError as error:
+            assert error.code == 400
         with request("/api/export") as response:
             assert "scope" in json.load(response)
         with request("/api/shutdown", "POST", {}) as response:
