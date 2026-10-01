@@ -26,6 +26,8 @@ docker compose down
 
 The token environment variable also authenticates these CLI requests. `down` preserves the named volume. `down -v` deletes the history and settings; only use it when you intend to remove those records. Stop/restart receives SIGTERM and closes incident records gracefully. Default limits are 256 MiB RAM, 0.25 CPU and 64 processes; adjust them if your host needs different limits.
 
+The image removes ping's installed file capability and uses the container's unprivileged ping sockets. This avoids a Linux execution denial when all container capabilities are dropped; see the [Linux capabilities manual](https://man7.org/linux/man-pages/man7/capabilities.7.html). CI checks the same restrictions and a loopback echo before publishing either architecture. TCP and DNS evidence remains available on hosts that restrict ICMP.
+
 ## Network viewpoint
 
 In the default bridge configuration, the gateway belongs to the Docker network. Docker Desktop on Windows/macOS adds a Linux VM. It cannot reliably decide whether a Wi-Fi spike came from the real router, and container interface types do not identify your physical connection. Use the native AuJitter monitor on the gaming PC for that investigation.

@@ -41,8 +41,9 @@ jobs:
       - name: Run container health and shutdown checks
         run: |
           docker run --rm aujitter:test --version
-          docker run -d --name aujitter-smoke -e AUJITTER_TOKEN=ci-only-unique-test-token-32-characters -p 127.0.0.1:9876:9876 aujitter:test
+          docker run -d --name aujitter-smoke --read-only --tmpfs /tmp:size=16m,mode=1777 --cap-drop ALL --sysctl net.ipv4.ping_group_range="0 2147483647" --security-opt no-new-privileges --memory 256m --cpus 0.25 --pids-limit 64 -e AUJITTER_TOKEN=ci-only-unique-test-token-32-characters -p 127.0.0.1:9876:9876 aujitter:test
           python3 scripts/container-smoke.py
+          docker exec aujitter-smoke ping -c 1 -W 1 127.0.0.1
           docker stop -t 15 aujitter-smoke
           test "$(docker inspect --format='{{.State.ExitCode}}' aujitter-smoke)" = 0
       - name: Push per-architecture image
