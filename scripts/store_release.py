@@ -302,21 +302,22 @@ def check_store(tag, directory):
     submission = cli_json(["msstore", "submission", "get", expected["store_id"]], "Published Store submission read")
     verify_update_ready(application, submission, version)
     print("Store authentication and AuJitter identity verified; no pending submission; package version is newer. No Store changes made.")
-    return bundle
+    return bundle, field(field(application, "lastPublishedApplicationSubmission"), "id")
 
 
 def publish(tag, directory):
     # Recheck immediately before the only mutating call, including on retries.
-    bundle = check_store(tag, directory)
+    bundle, previous_submission_id = check_store(tag, directory)
     expected = identity()
     run_capture([
         "msstore", "publish", str(bundle), "--appId", expected["store_id"],
         "--priceId", "Free", "--uploadTimeout", "600",
     ], "Store upload/submission (inspect Partner Center before retrying if this failed)", timeout=900)
     application = cli_json(["msstore", "apps", "get", expected["store_id"]], "Submitted Store application read")
+    verify_store_application(application, expected)
     submission = field(application, "pendingApplicationSubmission") or field(application, "lastPublishedApplicationSubmission")
-    if not submission or not field(submission, "id"):
-        raise ReleaseError("The publish command completed but a submission ID could not be verified. Inspect Partner Center before retrying.")
+    if not submission or not field(submission, "id") or field(submission, "id") == previous_submission_id:
+        raise ReleaseError("The publish command completed but a new submission ID could not be verified. Inspect Partner Center before retrying.")
     print(f"Store submission {field(submission, 'id')} sent with x64 and ARM64. Microsoft certification/publication is still required.")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

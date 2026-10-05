@@ -230,6 +230,17 @@ class StoreReleaseChecks(unittest.TestCase):
         self.assertIn("x64 and ARM64", summary)
         self.assertIn("Certification has not been claimed as passed", summary)
 
+    def test_old_submission_cannot_be_reported_as_new(self):
+        target = self.directory / "bundle"
+        target.mkdir()
+        bundle(target)
+        responses = [json.dumps(application()), json.dumps({"applicationPackages": [{"version": "0.1.1.0"}]}),
+                     "", json.dumps(application())]
+        with patch.object(store, "configure_store"), patch.object(store, "run_capture", side_effect=responses), redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(store.ReleaseError, "new submission ID could not be verified"):
+                store.publish("v0.1.2", self.directory)
+        self.assertFalse(self.summary.exists())
+
     def test_cli_errors_never_expose_secrets_or_raw_output(self):
         command = ["msstore", "reconfigure", "--clientSecret", "private-test-secret"]
         failures = (
