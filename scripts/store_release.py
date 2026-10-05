@@ -254,12 +254,56 @@ def prepare(tag, directory, download=False):
 
 def configure_store():
     validate_credentials(os.environ)
-    run_capture(["msstore", "settings", "--enableTelemetry", "false"], "Store CLI settings")
+    # v0.4.3 initialises credentials before running settings. Disable telemetry
+    # on disk before its first invocation, then configure the unattended CLI.
+    configuration = cli_configuration_directory()
+    configuration.mkdir(parents=True, exist_ok=True)
+    (configuration / "telemetrySettings.json").write_text(
+        json.dumps({"TelemetryEnabled": False}), encoding="utf-8",
+    )
     run_capture([
         "msstore", "reconfigure", "--tenantId", os.environ[SECRET_NAMES[0]],
         "--clientId", os.environ[SECRET_NAMES[1]], "--clientSecret", os.environ[SECRET_NAMES[2]],
         "--sellerId", os.environ[SECRET_NAMES[3]],
     ], "Store credential configuration")
+    run_capture(["msstore", "settings", "--enableTelemetry", "false"], "Store CLI settings")
+
+
+def cli_configuration_directory():
+    local_data = os.environ.get("LOCALAPPDATA")
+    if not local_data or not Path(local_data).is_absolute():
+        raise ReleaseError("Store CLI configuration requires an absolute Windows LOCALAPPDATA directory.")
+    directory = Path(local_data).resolve() / "Microsoft" / "MSStore.CLI"
+    if directory.resolve() != directory:
+        raise ReleaseError("Refusing a redirected Store CLI configuration directory.")
+    return directory
+
+
+def cleanup_store():
+    # The CLI's --reset uses an interactive confirmation with a default of No.
+    # Limit direct cleanup to the disposable GitHub-hosted Windows runner.
+    if os.name != "nt" or os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
+        raise ReleaseError("Temporary credential cleanup is restricted to GitHub-hosted Windows runners.")
+    configuration = cli_configuration_directory()
+    client_id = os.environ.get("AZURE_AD_APPLICATION_CLIENT_ID", "")
+    if client_id:
+        try:
+            client_id = str(uuid.UUID(client_id))
+        except ValueError:
+            raise ReleaseError("Cannot clean up a credential with an invalid client ID.") from None
+        import ctypes
+        from ctypes import wintypes
+        credentials = ctypes.WinDLL("advapi32.dll", use_last_error=True)
+        delete = credentials.CredDeleteW
+        delete.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD)
+        delete.restype = wintypes.BOOL
+        # Exact target and GENERIC type used by the pinned CLI. ERROR_NOT_FOUND
+        # is expected if an earlier step stopped before storing the credential.
+        if not delete(f"MicrosoftStoreCli:user={client_id}", 1, 0) and ctypes.get_last_error() != 1168:
+            raise ReleaseError("Could not remove the temporary Store CLI credential.")
+    if configuration.exists():
+        shutil.rmtree(configuration)
+    print("Removed the temporary Store CLI credential and configuration from the disposable runner.")
 
 
 def verify_store_application(application, expected):
@@ -327,7 +371,7 @@ def publish(tag, directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "credentials", "check", "publish"))
+    parser.add_argument("command", choices=("prepare", "credentials", "check", "publish", "cleanup"))
     parser.add_argument("--tag")
     parser.add_argument("--directory", type=Path, default=Path("store-upload"))
     parser.add_argument("--download", action="store_true")
@@ -336,6 +380,8 @@ def main():
         if args.command == "credentials":
             validate_credentials(os.environ)
             print("All four required secret names are present and their ID formats are valid. Authentication is checked separately.")
+        elif args.command == "cleanup":
+            cleanup_store()
         else:
             if not args.tag:
                 raise ReleaseError("A release tag is required.")

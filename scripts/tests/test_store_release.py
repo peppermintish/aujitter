@@ -156,6 +156,42 @@ class StoreReleaseChecks(unittest.TestCase):
         with self.assertRaisesRegex(store.ReleaseError, "numeric Partner Center seller ID"):
             store.validate_credentials(values)
 
+    def test_fresh_cli_is_configured_before_settings_and_telemetry_is_off(self):
+        values = dict(zip(store.SECRET_NAMES, (
+            "11111111-2222-4333-8444-555555555555", "66666666-7777-4888-8999-000000000000",
+            "private-test-secret", "12345",
+        )))
+        values["LOCALAPPDATA"] = str(self.directory)
+        configured = False
+
+        def fresh_cli(command, operation, timeout=120):
+            nonlocal configured
+            telemetry = json.loads((self.directory / "Microsoft/MSStore.CLI/telemetrySettings.json").read_text())
+            self.assertIs(telemetry["TelemetryEnabled"], False)
+            if command[1] == "reconfigure":
+                configured = True
+            elif not configured:
+                raise store.ReleaseError("Fresh CLI requires credential initialisation before settings.")
+            return ""
+
+        with patch.dict(os.environ, values), patch.object(store, "run_capture", side_effect=fresh_cli):
+            store.configure_store()
+        self.assertTrue(configured)
+
+    def test_cleanup_refuses_local_or_self_hosted_machines(self):
+        for runner in ("", "self-hosted"):
+            with self.subTest(runner=runner), patch.dict(os.environ, {
+                "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": runner,
+            }), patch.object(store.shutil, "rmtree") as remove:
+                with self.assertRaisesRegex(store.ReleaseError, "restricted"):
+                    store.cleanup_store()
+                remove.assert_not_called()
+
+    def test_cli_configuration_requires_absolute_path(self):
+        with patch.dict(os.environ, {"LOCALAPPDATA": "relative-directory"}):
+            with self.assertRaisesRegex(store.ReleaseError, "absolute"):
+                store.cli_configuration_directory()
+
     def test_wrong_store_application_rejected(self):
         app = application()
         app["id"] = "OTHERAPP"

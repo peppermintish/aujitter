@@ -93,9 +93,4 @@ jobs:
         run: python scripts/store_release.py publish --tag "$env:RELEASE_TAG" --directory store-upload
       - name: Remove temporary CLI credentials
         if: always()
-        shell: pwsh
-        run: |
-          if (Get-Command msstore -ErrorAction SilentlyContinue) {
-            msstore reconfigure --reset *> $null
-            if ($LASTEXITCODE -ne 0) { throw 'Could not reset the temporary Store CLI configuration.' }
-          }
+        run: python scripts/store_release.py cleanup
