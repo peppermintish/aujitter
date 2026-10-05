@@ -6,11 +6,15 @@ Publication still requires Microsoft's certification. Successful upload/submissi
 
 ## Readiness audit: 5 October 2026
 
-[Read-only validation run #2](https://github.com/peppermintish/aujitter/actions/runs/37293413128) passed all 21 release-check tests and downloaded, verified and bundled the real `v0.1.1` x64/ARM64 release packages on GitHub's Windows runner. The workflow syntax checks and an offline bundle of the same packages also passed locally. This run made no Store submission.
+[Read-only validation run #4](https://github.com/peppermintish/aujitter/actions/runs/37301168474), at commit `f5b9f11`, passed all 25 release-check tests and downloaded, verified and bundled the real `v0.1.1` x64/ARM64 release packages on GitHub's Windows runner. Workflow syntax checks also passed locally.
 
-A further local regression check (22 tests passing) ensures the previously published submission cannot be reported as a newly submitted update when the API has not yet returned a new submission ID.
+All four required repository secrets are configured. The tenant and numeric seller IDs were checked in Partner Center. The account owner approved a dedicated **AuJitter Store Publisher CI** application, the Windows Manager role and a six-month client secret. GitHub successfully authenticated with that credential, and the Store API returned the matching AuJitter product ID, package identity, publisher and package family. The unattended runner credential cleanup also passed.
 
-The tenant ID and numeric seller ID have been verified in Partner Center and saved as repository secrets. The Store job correctly stopped because `AZURE_AD_APPLICATION_CLIENT_ID` and `AZURE_AD_APPLICATION_SECRET` are absent. A dedicated CI application, its publishing access and an expiring client secret are prepared for account-owner approval. Store authentication has **not** yet been verified. Submission 1 is still in certification, so a live first version is also required before the next update can be submitted.
+The remaining registered client secret expires **3 April 2027** (Entra's 180-day option). Replace the GitHub secret before that date. Partner Center's Add new key initially generated a two-year credential; it is no longer listed in Entra, which now shows only the six-month credential used by GitHub. Use Entra's explicit expiration selection for future keys rather than assuming Partner Center's default lifetime.
+
+Run #4 is intentionally marked failed by the update-readiness guard: Submission 1 is still in certification and the first version is not live. No Store submission was created, uploaded or committed. Authentication, package validation and cleanup have been exercised against the real services; the automatic upload/commit path remains untested until a newer version is released after the first version goes live, with no pending Store submission.
+
+Run #3 exposed two unattended CLI issues: `settings` requires configured credentials, and `reconfigure --reset` prompts with a default of No. The workflow now disables telemetry on disk before the first CLI invocation, configures credentials before running `settings`, and removes the exact CLI credential and configuration directly on the disposable GitHub-hosted Windows runner. Tests cover fresh CLI initialisation and prevent this cleanup on local or self-hosted machines.
 
 Run #1's package-job summary incorrectly claimed a submission because a mocked unit test inherited the runner's summary-file environment variable. No Store submission occurred. The tests now write summaries only to temporary files and assert that validation and blocked publishing do not produce a submission summary. Run #2 contains the fix. Bundle artifact names are stable across attempts so rerunning only the failed Store job can reuse the validated package artifact.
 
@@ -25,11 +29,11 @@ Set these four **GitHub Actions repository secrets** on `peppermintish/aujitter`
 | `AZURE_AD_APPLICATION_SECRET` | Client secret **value**, not the secret's ID |
 | `SELLER_ID` | Numeric Partner Center developer seller ID, not the CN publisher ID |
 
-Microsoft's documented CLI setup requires the Entra application to be added to Partner Center with the Windows Manager role. This standard role applies across the account's products and permits managing users, roles and tenants; it excludes tax and payout settings. Creating that identity, granting access and generating its credential require the account owner's approval. Keep a record of the client secret's expiration and replace it in GitHub before expiry. GitHub does not return saved secret values, so a secrets list only proves presence; the read-only Store API check proves authentication and access to AuJitter.
+Microsoft's documented CLI setup requires the Entra application to be added to Partner Center with the Windows Manager role. This standard role applies across the account's products and permits managing users, roles and tenants; it excludes tax and payout settings. The account owner approved that access for AuJitter's dedicated CI identity. Keep a record of the client secret's expiration and replace it in GitHub before expiry. GitHub does not return saved secret values, so a secrets list only proves presence; the read-only Store API check proves authentication and access to AuJitter.
 
 The Store product ID, package identity, publisher and package family are public identifiers in `packaging/windows/identity.json`. The release checks compare both the packages and the authenticated Store API response with that file. They are not client credentials and do not need separate GitHub secrets.
 
-Only the four named secrets reach the Store job. They are passed through environment variables, never interpolated into shell code. The script captures credential-bearing commands without printing their arguments or raw responses, disables CLI telemetry, and the workflow resets its temporary CLI credentials on exit. Uploaded CI artifacts contain packages and package-validation metadata only.
+Only the four named secrets reach the Store job. They are passed through environment variables, never interpolated into shell code. The script captures credential-bearing commands without printing their arguments or raw responses, disables CLI telemetry, and the workflow removes its temporary CLI credential and configuration on exit. Cleanup is restricted to GitHub-hosted Windows runners. Uploaded CI artifacts contain packages and package-validation metadata only.
 
 ## Validate without changing the Store
 
