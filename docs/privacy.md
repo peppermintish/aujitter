@@ -1,6 +1,6 @@
 # Privacy policy
 
-AuJitter 0.1.0 stores monitoring settings and history on the device running its monitor. It does not upload history, collect product analytics, or require an account. GitHub is used to distribute source, packages and container images; Microsoft Store is an optional distribution channel.
+AuJitter stores monitoring settings and history on the device running its monitor. It does not upload history, collect product analytics, or require an account. GitHub is used to distribute source, packages and container images; Microsoft Store is an optional distribution channel.
 
 Stored samples can contain local interface names, local IP addresses, gateway and DNS addresses, configured ISP labels, router model/WAN status, probe targets, timings and errors. The default retention is 30 days of detailed samples and 365 days of incidents and hourly summaries. Changing retention to zero keeps that category indefinitely. Pruning deletes expired rows; SQLite may retain free pages for reuse, so this is not a forensic secure-erasure tool.
 

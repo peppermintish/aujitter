@@ -12,7 +12,7 @@ Every push and pull request runs validation; successful package jobs upload down
 
 ## Current Store identity
 
-The product was reserved in the existing Partner Center account on 1 October 2026 and remains **in draft**. User-visible branding is **AuJitter**. Microsoft's assigned identity keeps its original casing:
+The product was reserved in the existing Partner Center account on 1 October 2026. Submission 1 was created on 5 October 2026 and remains **in draft**. Both version 0.1.1.0 MSIX packages (x64 and ARM64) were uploaded, validated and saved in Partner Center. Package acceptance validation reports the expected `runFullTrust` approval warning; this is not a certification pass. User-visible branding is **AuJitter**. Microsoft's assigned identity keeps its original casing:
 
 - Package Name: `Gofor.auJitter`
 - Publisher: `CN=A687626B-CDF9-44E4-8D21-944561AEECD8`
@@ -25,7 +25,7 @@ These public package identity values live in `packaging/windows/identity.json`. 
 
 `MakeAppx pack` validates the manifest and creates an **unsigned** package. Microsoft Store ingestion can accept an unsigned MSIX and applies Store signing. Direct sideloading needs a valid signature trusted by that machine. The portable ZIP is immediately usable without installing a signing certificate. No self-signed trust root, certificate, or private signing key is installed automatically.
 
-For future submission, select the corresponding MSIX files for x64 and ARM64 under this product. Finish the listing, screenshots, privacy-policy URL, support details, age rating, pricing/availability and any full-trust capability explanation, then run Windows App Certification Kit and review the package before submission. Reserving a name or passing MakeAppx is not Store certification. Partner Center currently asks for a submission within three months of name reservation.
+For future updates, select the corresponding MSIX files for x64 and ARM64 under this product. Finish the listing, screenshots, privacy-policy URL, support details, age rating, pricing/availability and any full-trust capability explanation, then run Windows App Certification Kit and review the package before submission. Local WACK testing has not completed: launching the installed tool required administrator approval. No local WACK pass is claimed. Reserving a name or passing MakeAppx is not Store certification. Partner Center currently asks for a submission within three months of name reservation.
 
 The sign-in preference uses a user-level startup entry and an installed executable path. Moving a portable app requires refreshing that preference; packaged app updates can also change the path, so re-enable it after an update until a Store-specific StartupTask implementation is introduced. No system service is installed. To remove the entry before uninstalling, use Settings or `aujitter startup disable`.
 
