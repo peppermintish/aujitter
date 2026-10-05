@@ -81,6 +81,11 @@ class StoreReleaseChecks(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
+        self.summary = self.directory / "github-step-summary.md"
+        # Mocked submissions must never write to the running GitHub job's summary.
+        summary_environment = patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(self.summary)})
+        summary_environment.start()
+        self.addCleanup(summary_environment.stop)
 
     def test_native_packages_and_checksums(self):
         for arch in store.MACHINES:
@@ -194,6 +199,7 @@ class StoreReleaseChecks(unittest.TestCase):
         with patch.object(store, "configure_store"), patch.object(store, "run_capture", side_effect=fake), redirect_stdout(io.StringIO()):
             store.check_store("v0.1.2", self.directory)
         self.assertEqual([command[1:3] for command in calls], [["apps", "get"], ["submission", "get"]])
+        self.assertFalse(self.summary.exists())
 
     def test_publish_cannot_replace_an_existing_submission(self):
         target = self.directory / "bundle"
@@ -201,11 +207,12 @@ class StoreReleaseChecks(unittest.TestCase):
         bundle(target)
         with patch.object(store, "configure_store"), patch.object(store, "run_capture", return_value=json.dumps(
             application(pending={"id": "active"}),
-        )) as run:
+        )) as run, redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(store.ReleaseError, "pending submission"):
                 store.publish("v0.1.2", self.directory)
         self.assertEqual(run.call_count, 1)
         self.assertEqual(run.call_args.args[0][1:3], ["apps", "get"])
+        self.assertFalse(self.summary.exists())
 
     def test_publish_rechecks_and_submits_one_bundle(self):
         target = self.directory / "bundle"
@@ -218,6 +225,10 @@ class StoreReleaseChecks(unittest.TestCase):
         command = run.call_args_list[2].args[0]
         self.assertEqual(command[:3], ["msstore", "publish", str(path)])
         self.assertIn(IDENTITY["store_id"], command)
+        summary = self.summary.read_text(encoding="utf-8")
+        self.assertIn("AuJitter v0.1.2", summary)
+        self.assertIn("x64 and ARM64", summary)
+        self.assertIn("Certification has not been claimed as passed", summary)
 
     def test_cli_errors_never_expose_secrets_or_raw_output(self):
         command = ["msstore", "reconfigure", "--clientSecret", "private-test-secret"]

@@ -55,11 +55,12 @@ jobs:
         run: python scripts/store_release.py prepare --tag "$env:RELEASE_TAG" --directory store-upload --download
       - uses: actions/upload-artifact@v7
         with:
-          name: Store-upload-${{ github.run_id }}-${{ github.run_attempt }}
+          name: Store-upload-${{ github.run_id }}
           path: store-upload/bundle/*
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+          overwrite: true
 
   store:
     name: Check Store credentials and optionally submit
@@ -77,7 +78,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: Store-upload-${{ github.run_id }}-${{ github.run_attempt }}
+          name: Store-upload-${{ github.run_id }}
           path: store-upload/bundle
       - name: Check required secret names and formats
         run: python scripts/store_release.py credentials
