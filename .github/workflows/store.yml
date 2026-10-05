@@ -1,0 +1,100 @@
+name: Microsoft Store release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing stable GitHub release to validate or submit
+        required: true
+        default: v0.1.1
+        type: string
+      publish:
+        description: Submit to Microsoft Store (leave unchecked for read-only validation)
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      publish:
+        default: false
+        type: boolean
+    secrets:
+      AZURE_AD_TENANT_ID:
+        required: false
+      AZURE_AD_APPLICATION_CLIENT_ID:
+        required: false
+      AZURE_AD_APPLICATION_SECRET:
+        required: false
+      SELLER_ID:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: microsoft-store-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  packages:
+    name: Validate and bundle both Windows packages
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Test Store release checks
+        run: python -m unittest discover -s scripts/tests -p "test_store*.py" -v
+      - name: Download, verify and bundle release packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python scripts/store_release.py prepare --tag "$env:RELEASE_TAG" --directory store-upload --download
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Store-upload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: store-upload/bundle/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  store:
+    name: Check Store credentials and optionally submit
+    needs: packages
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+      AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+      AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+      SELLER_ID: ${{ secrets.SELLER_ID }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      MSSTORE_OUTPUT_STREAM: stderr
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: Store-upload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: store-upload/bundle
+      - name: Check required secret names and formats
+        run: python scripts/store_release.py credentials
+      - name: Install pinned Microsoft Store CLI
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+        with:
+          version: v0.4.3
+      - name: Read-only Store authentication and update readiness check
+        run: python scripts/store_release.py check --tag "$env:RELEASE_TAG" --directory store-upload
+      - name: Submit both architectures for Store certification
+        if: inputs.publish
+        run: python scripts/store_release.py publish --tag "$env:RELEASE_TAG" --directory store-upload
+      - name: Remove temporary CLI credentials
+        if: always()
+        shell: pwsh
+        run: |
+          if (Get-Command msstore -ErrorAction SilentlyContinue) {
+            msstore reconfigure --reset *> $null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not reset the temporary Store CLI configuration.' }
+          }

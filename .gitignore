@@ -3,6 +3,7 @@
 /dist
 /artifacts
 /.local
+/store-upload
 .env
 *.sqlite3
 *.sqlite3-shm

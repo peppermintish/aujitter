@@ -7,7 +7,7 @@ permissions:
   contents: read
 concurrency:
   group: native-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 jobs:
   quality:
     runs-on: ubuntu-24.04
@@ -21,6 +21,7 @@ jobs:
       - run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
       - run: cargo test --locked --no-default-features
       - run: python3 scripts/check-assets.py
+      - run: python3 -m unittest discover -s scripts/tests -p "test_store*.py" -v
   package:
     needs: quality
     strategy:
@@ -91,3 +92,17 @@ jobs:
         run: |
           python3 scripts/check-release.py "$RELEASE_TAG"
           gh release create "$RELEASE_TAG" dist/* --title "AuJitter $RELEASE_TAG" --notes-file docs/release-notes.md --verify-tag
+  store:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: release
+    uses: ./.github/workflows/store.yml
+    permissions:
+      contents: read
+    with:
+      release_tag: ${{ github.ref_name }}
+      publish: true
+    secrets:
+      AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+      AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+      AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+      SELLER_ID: ${{ secrets.SELLER_ID }}
