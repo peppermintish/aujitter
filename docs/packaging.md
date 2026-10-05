@@ -12,7 +12,9 @@ Every push and pull request runs validation; successful package jobs upload down
 
 ## Current Store identity
 
-The product was reserved in the existing Partner Center account on 1 October 2026. Submission 1 was created on 5 October 2026 and remains **in draft**. Both version 0.1.1.0 MSIX packages (x64 and ARM64) were uploaded, validated and saved in Partner Center. Package acceptance validation reports the expected `runFullTrust` approval warning; this is not a certification pass. User-visible branding is **AuJitter**. Microsoft's assigned identity keeps its original casing:
+The product was reserved in the existing Partner Center account on 1 October 2026. Submission 1 was created and submitted for certification on 5 October 2026. Partner Center reports **In certification**, with pre-processing in progress and publication set to start automatically after certification passes. Both version 0.1.1.0 MSIX packages (x64 and ARM64) were uploaded, validated and included in the submission. The saved age rating is Microsoft Store/PEGI/IARC **3+** and ESRB **Everyone**. Microsoft still needs to complete certification, including review of the `runFullTrust` capability; package acceptance validation is not a certification pass.
+
+User-visible branding is **AuJitter**. Microsoft's assigned identity keeps its original casing:
 
 - Package Name: `Gofor.auJitter`
 - Publisher: `CN=A687626B-CDF9-44E4-8D21-944561AEECD8`
